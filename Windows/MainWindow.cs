@@ -2,30 +2,50 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using JPRaidDictionary.Data;
 using JPRaidDictionary.Models;
+using JPRaidDictionary.Services;
 
 namespace JPRaidDictionary.Windows;
 
 /// <summary>
-/// The main dictionary window: a search box across the top, a category list
-/// on the left, a results list in the middle, and the selected entry's
-/// details (including a "Copy Japanese" button) on the right.
+/// The main plugin window. Hosts the "Dictionary" tab (search box, category
+/// list, results list, and entry details - unchanged from the original
+/// plugin) and the "Quick Translate" tab (OpenAI-powered EN/JP translation).
+/// A small status bar at the top always shows the current chat translation
+/// mode and OpenAI connection status.
 /// </summary>
 public class MainWindow : Window, IDisposable
 {
+    private readonly Plugin plugin;
     private readonly DictionaryRepository repository;
 
+    // --- Dictionary tab state ---
     private string searchQuery = string.Empty;
     private DictionaryCategory? selectedCategory;
     private DictionaryEntry? selectedEntry;
 
+    // --- Quick Translate tab state ---
+    private string openAiApiKeyInput;
+    private string anthropicApiKeyInput;
+    private bool isTestingConnection;
+
+    private string translateInput = string.Empty;
+    private string translateOutput = string.Empty;
+    private TranslationDirection translationDirection = TranslationDirection.EnglishToJapanese;
+    private bool isTranslating;
+    private string? translateError;
+
     public MainWindow(Plugin plugin, DictionaryRepository repository)
         : base("JP Raid Dictionary##JPRaidDictionaryMainWindow")
     {
+        this.plugin = plugin;
         this.repository = repository;
+        openAiApiKeyInput = plugin.Configuration.OpenAiApiKey;
+        anthropicApiKeyInput = plugin.Configuration.AnthropicApiKey;
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -39,6 +59,64 @@ public class MainWindow : Window, IDisposable
     }
 
     public override void Draw()
+    {
+        DrawStatusBar();
+        ImGui.Separator();
+
+        if (ImGui.BeginTabBar("##JPRaidDictionaryTabs"))
+        {
+            if (ImGui.BeginTabItem("Dictionary"))
+            {
+                DrawDictionaryTab();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Quick Translate"))
+            {
+                DrawQuickTranslateTab();
+                ImGui.EndTabItem();
+            }
+
+            ImGui.EndTabBar();
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Status bar
+    // ------------------------------------------------------------------
+
+    private void DrawStatusBar()
+    {
+        ImGui.TextDisabled($"{TranslationService.GetProviderDisplayName(plugin.Configuration.TranslationProvider)}:");
+        ImGui.SameLine();
+        DrawOpenAiStatusText();
+
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+
+        ImGui.TextDisabled("Tip: use /jpt <message> to translate & send to chat");
+    }
+
+    private void DrawOpenAiStatusText()
+    {
+        var (text, color) = GetOpenAiStatusDisplay(plugin.TranslationService.Status);
+        ImGui.TextColored(color, text);
+    }
+
+    private static (string Text, Vector4 Color) GetOpenAiStatusDisplay(ApiConnectionStatus status) => status switch
+    {
+        ApiConnectionStatus.Connected => ("Connected", new Vector4(0.4f, 1f, 0.4f, 1f)),
+        ApiConnectionStatus.InvalidApiKey => ("Invalid API Key", new Vector4(1f, 0.4f, 0.4f, 1f)),
+        ApiConnectionStatus.Error => ("Error", new Vector4(1f, 0.4f, 0.4f, 1f)),
+        _ => ("Not Configured", new Vector4(0.7f, 0.7f, 0.7f, 1f)),
+    };
+
+    // ------------------------------------------------------------------
+    // Dictionary tab
+    // ------------------------------------------------------------------
+
+    private void DrawDictionaryTab()
     {
         DrawSearchBar();
 
@@ -210,4 +288,148 @@ public class MainWindow : Window, IDisposable
         DictionaryCategory.CommonPFTerms => "Common PF Terms",
         _ => category.ToString(),
     };
+
+    // ------------------------------------------------------------------
+    // Quick Translate tab
+    // ------------------------------------------------------------------
+
+    private void DrawQuickTranslateTab()
+    {
+        ImGui.TextDisabled("Settings");
+        ImGui.Separator();
+
+        ImGui.Text("Provider");
+
+        var provider = plugin.Configuration.TranslationProvider;
+
+        if (ImGui.RadioButton("OpenAI", ref provider, TranslationProviderType.OpenAi))
+        {
+            plugin.Configuration.TranslationProvider = provider;
+            plugin.Configuration.Save();
+            plugin.TranslationService.ResetStatus();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGui.RadioButton("Claude", ref provider, TranslationProviderType.Claude))
+        {
+            plugin.Configuration.TranslationProvider = provider;
+            plugin.Configuration.Save();
+            plugin.TranslationService.ResetStatus();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGui.RadioButton("Free (Google Translate)", ref provider, TranslationProviderType.GoogleTranslate))
+        {
+            plugin.Configuration.TranslationProvider = provider;
+            plugin.Configuration.Save();
+            plugin.TranslationService.ResetStatus();
+        }
+
+        if (provider == TranslationProviderType.Claude)
+        {
+            ImGui.Text("Claude API Key");
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##AnthropicApiKey", ref anthropicApiKeyInput, 256, ImGuiInputTextFlags.Password))
+            {
+                plugin.Configuration.AnthropicApiKey = anthropicApiKeyInput;
+                plugin.Configuration.Save();
+            }
+        }
+        else if (provider == TranslationProviderType.GoogleTranslate)
+        {
+            ImGui.TextWrapped("No API key required. Uses a free, unofficial Google Translate endpoint - " +
+                "plain literal translation only, without FFXIV-specific terminology.");
+        }
+        else
+        {
+            ImGui.Text("OpenAI API Key");
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.InputText("##OpenAiApiKey", ref openAiApiKeyInput, 256, ImGuiInputTextFlags.Password))
+            {
+                plugin.Configuration.OpenAiApiKey = openAiApiKeyInput;
+                plugin.Configuration.Save();
+            }
+        }
+
+        if (ImGui.Button(isTestingConnection ? "Testing..." : "Test Connection"))
+        {
+            if (!isTestingConnection)
+                _ = TestConnectionAsync();
+        }
+
+        ImGui.SameLine();
+        ImGui.Text("Status:");
+        ImGui.SameLine();
+        DrawOpenAiStatusText();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.TextDisabled("Translate");
+        ImGui.Separator();
+
+        ImGui.RadioButton("EN -> JP", ref translationDirection, TranslationDirection.EnglishToJapanese);
+        ImGui.SameLine();
+        ImGui.RadioButton("JP -> EN", ref translationDirection, TranslationDirection.JapaneseToEnglish);
+
+        ImGui.Text("Input");
+        ImGui.InputTextMultiline("##QuickTranslateInput", ref translateInput, 1000, new Vector2(-1, 80));
+
+        if (ImGui.Button(isTranslating ? "Translating..." : "Translate"))
+        {
+            if (!isTranslating && !string.IsNullOrWhiteSpace(translateInput))
+                _ = TranslateAsync();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGui.Button("Copy"))
+            ImGui.SetClipboardText(translateOutput);
+
+        ImGui.Text("Output");
+        ImGui.InputTextMultiline("##QuickTranslateOutput", ref translateOutput, 1000, new Vector2(-1, 80), ImGuiInputTextFlags.ReadOnly);
+
+        if (!string.IsNullOrEmpty(translateError))
+        {
+            ImGui.Spacing();
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), translateError);
+        }
+    }
+
+    private async Task TestConnectionAsync()
+    {
+        isTestingConnection = true;
+
+        try
+        {
+            await plugin.TranslationService.TestConnectionAsync();
+        }
+        finally
+        {
+            isTestingConnection = false;
+        }
+    }
+
+    private async Task TranslateAsync()
+    {
+        isTranslating = true;
+        translateError = null;
+
+        try
+        {
+            var result = await plugin.TranslationService.TranslateAsync(translateInput, translationDirection);
+
+            translateOutput = result.Text;
+
+            if (!result.Success)
+                translateError = result.ErrorMessage;
+        }
+        finally
+        {
+            isTranslating = false;
+        }
+    }
 }
