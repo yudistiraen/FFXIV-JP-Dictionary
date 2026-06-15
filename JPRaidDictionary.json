@@ -1,0 +1,17 @@
+{
+  "Author": "yudistiraen",
+  "Name": "JP Raid Dictionary",
+  "InternalName": "JPRaidDictionary",
+  "AssemblyVersion": "1.0.0.0",
+  "Punchline": "A pocket dictionary for Japanese raid terms, PF shorthand, and job abbreviations.",
+  "Description": "A lightweight dictionary for Japanese raid terminology, Party Finder shorthand, and job abbreviations. Useful for players raiding on Japanese Data Centers.",
+  "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/yudistiraen/FFXIV-JP-Dictionary",
+  "DalamudApiLevel": 15,
+  "Tags": [
+    "dictionary",
+    "translation",
+    "raid",
+    "utility"
+  ]
+}
