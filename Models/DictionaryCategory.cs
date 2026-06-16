@@ -6,8 +6,9 @@ namespace JPRaidDictionary.Models;
 /// </summary>
 public enum DictionaryCategory
 {
-    RaidTerms,
     Jobs,
     PFShorthand,
     CommonPFTerms,
+    Communication,
+    Mechanics,
 }

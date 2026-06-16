@@ -244,6 +244,11 @@ public class MainWindow : Window, IDisposable
         if (ImGui.Button("Copy Japanese"))
             ImGui.SetClipboardText(entry.JapaneseName);
 
+        ImGui.SameLine();
+
+        if (ImGui.Button("Say in Chat"))
+            Plugin.Framework.RunOnFrameworkThread(() => ChatSendingService.SendMessage(entry.JapaneseName));
+
         if (!hasJapanese)
             ImGui.EndDisabled();
 
@@ -282,10 +287,11 @@ public class MainWindow : Window, IDisposable
 
     private static string GetCategoryDisplayName(DictionaryCategory category) => category switch
     {
-        DictionaryCategory.RaidTerms => "Raid Terms",
         DictionaryCategory.Jobs => "Jobs",
         DictionaryCategory.PFShorthand => "PF Shorthand",
         DictionaryCategory.CommonPFTerms => "Common PF Terms",
+        DictionaryCategory.Communication => "Communication",
+        DictionaryCategory.Mechanics => "Mechanics",
         _ => category.ToString(),
     };
 
