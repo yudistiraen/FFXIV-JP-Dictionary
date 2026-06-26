@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -11,21 +12,21 @@ using JPRaidDictionary.Models;
 namespace JPRaidDictionary.Services;
 
 /// <summary>
-/// <see cref="ITranslationProvider"/> implementation backed by the OpenAI
-/// Chat Completions API. Uses the API key the user supplies via
-/// <see cref="Configuration.OpenAiApiKey"/> - the plugin never ships with or
-/// uses a developer-owned key.
+/// <see cref="ITranslationProvider"/> for any OpenAI-compatible Chat Completions API.
+/// Base URL and model are resolved via delegates so they can be read from
+/// <see cref="Configuration"/> at call time - changes take effect immediately.
 /// </summary>
 public class OpenAiTranslationProvider : ITranslationProvider
 {
-    private const string ApiBaseUrl = "https://api.openai.com/v1";
-    private const string Model = "gpt-4o-mini";
-
     private readonly HttpClient httpClient;
+    private readonly Func<string> getBaseUrl;
+    private readonly Func<string> getModel;
 
-    public OpenAiTranslationProvider(HttpClient httpClient)
+    public OpenAiTranslationProvider(HttpClient httpClient, Func<string> getBaseUrl, Func<string> getModel)
     {
         this.httpClient = httpClient;
+        this.getBaseUrl = getBaseUrl;
+        this.getModel = getModel;
     }
 
     public bool RequiresApiKey => true;
@@ -33,11 +34,17 @@ public class OpenAiTranslationProvider : ITranslationProvider
     public async Task<string> TranslateAsync(string text, TranslationDirection direction, string apiKey, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(apiKey))
-            throw new InvalidOperationException("OpenAI API key is not configured.");
+            throw new InvalidOperationException("API key is not configured.");
+
+        var baseUrl = getBaseUrl().TrimEnd('/');
+        var model = getModel();
+
+        if (string.IsNullOrWhiteSpace(model))
+            throw new InvalidOperationException("Model is not configured. Please select or enter a model name.");
 
         var requestBody = new
         {
-            model = Model,
+            model,
             messages = new object[]
             {
                 new { role = "system", content = TranslationPrompts.SystemPrompt },
@@ -46,7 +53,7 @@ public class OpenAiTranslationProvider : ITranslationProvider
             temperature = 0.2,
         };
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{ApiBaseUrl}/chat/completions")
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/chat/completions")
         {
             Content = JsonContent.Create(requestBody),
         };
@@ -57,7 +64,7 @@ public class OpenAiTranslationProvider : ITranslationProvider
         if (!response.IsSuccessStatusCode)
         {
             var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            throw new HttpRequestException($"OpenAI API request failed with status {(int)response.StatusCode} ({response.StatusCode}): {body}");
+            throw new HttpRequestException($"API request failed with status {(int)response.StatusCode} ({response.StatusCode}): {body}");
         }
 
         var json = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -76,7 +83,9 @@ public class OpenAiTranslationProvider : ITranslationProvider
         if (string.IsNullOrWhiteSpace(apiKey))
             return ApiConnectionStatus.NotConfigured;
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, $"{ApiBaseUrl}/models");
+        var baseUrl = getBaseUrl().TrimEnd('/');
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/models");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
@@ -88,5 +97,43 @@ public class OpenAiTranslationProvider : ITranslationProvider
             return ApiConnectionStatus.InvalidApiKey;
 
         return ApiConnectionStatus.Error;
+    }
+
+    public async Task<List<string>> FetchModelsAsync(string apiKey, CancellationToken cancellationToken = default)
+    {
+        var baseUrl = getBaseUrl().TrimEnd('/');
+
+        if (string.IsNullOrWhiteSpace(baseUrl))
+            throw new InvalidOperationException("Base URL is not configured.");
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/models");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new HttpRequestException($"Failed to fetch models ({(int)response.StatusCode}): {body}");
+        }
+
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken).ConfigureAwait(false);
+        var models = new List<string>();
+
+        if (json.TryGetProperty("data", out var dataArray) && dataArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var model in dataArray.EnumerateArray())
+            {
+                if (model.TryGetProperty("id", out var idProp))
+                {
+                    var id = idProp.GetString();
+                    if (!string.IsNullOrEmpty(id))
+                        models.Add(id);
+                }
+            }
+        }
+
+        models.Sort(StringComparer.OrdinalIgnoreCase);
+        return models;
     }
 }

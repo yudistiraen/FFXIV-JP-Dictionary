@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using JPRaidDictionary.Models;
@@ -22,4 +23,7 @@ public interface ITranslationProvider
 
     /// <summary>Verifies that <paramref name="apiKey"/> is valid and usable. Ignored if <see cref="RequiresApiKey"/> is <c>false</c>.</summary>
     Task<ApiConnectionStatus> TestConnectionAsync(string apiKey, CancellationToken cancellationToken = default);
+
+    /// <summary>Fetches the list of available model identifiers from the provider's API.</summary>
+    Task<List<string>> FetchModelsAsync(string apiKey, CancellationToken cancellationToken = default);
 }

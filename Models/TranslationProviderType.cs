@@ -11,4 +11,16 @@ public enum TranslationProviderType
 
     /// <summary>Free, keyless Google Translate endpoint. No API key required.</summary>
     GoogleTranslate,
+
+    /// <summary>OpenRouter (OpenAI-compatible).</summary>
+    OpenRouter,
+
+    /// <summary>Groq (OpenAI-compatible).</summary>
+    Groq,
+
+    /// <summary>Together AI (OpenAI-compatible).</summary>
+    TogetherAi,
+
+    /// <summary>Any OpenAI-compatible API with a user-supplied base URL.</summary>
+    CustomOpenAi,
 }

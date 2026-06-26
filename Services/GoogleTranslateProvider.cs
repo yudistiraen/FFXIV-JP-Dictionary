@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text;
@@ -70,4 +71,7 @@ public class GoogleTranslateProvider : ITranslationProvider
             return ApiConnectionStatus.Error;
         }
     }
+
+    public Task<List<string>> FetchModelsAsync(string apiKey, CancellationToken cancellationToken = default)
+        => Task.FromResult(new List<string>());
 }

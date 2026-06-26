@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -43,10 +44,30 @@ public sealed class Plugin : IDalamudPlugin
         Repository = new DictionaryRepository();
 
         httpClient = new HttpClient();
-        ITranslationProvider openAiProvider = new OpenAiTranslationProvider(httpClient);
-        ITranslationProvider anthropicProvider = new AnthropicTranslationProvider(httpClient);
-        ITranslationProvider googleTranslateProvider = new GoogleTranslateProvider(httpClient);
-        TranslationService = new TranslationService(openAiProvider, anthropicProvider, googleTranslateProvider, Configuration, Log);
+
+        var providers = new Dictionary<TranslationProviderType, ITranslationProvider>
+        {
+            [TranslationProviderType.OpenAi] = new OpenAiTranslationProvider(httpClient,
+                () => "https://api.openai.com/v1",
+                () => Configuration.OpenAiModel),
+            [TranslationProviderType.Claude] = new AnthropicTranslationProvider(httpClient,
+                () => Configuration.AnthropicModel),
+            [TranslationProviderType.OpenRouter] = new OpenAiTranslationProvider(httpClient,
+                () => "https://openrouter.ai/api/v1",
+                () => Configuration.OpenRouterModel),
+            [TranslationProviderType.Groq] = new OpenAiTranslationProvider(httpClient,
+                () => "https://api.groq.com/openai/v1",
+                () => Configuration.GroqModel),
+            [TranslationProviderType.TogetherAi] = new OpenAiTranslationProvider(httpClient,
+                () => "https://api.together.xyz/v1",
+                () => Configuration.TogetherAiModel),
+            [TranslationProviderType.CustomOpenAi] = new OpenAiTranslationProvider(httpClient,
+                () => Configuration.CustomOpenAiBaseUrl,
+                () => Configuration.CustomOpenAiModel),
+            [TranslationProviderType.GoogleTranslate] = new GoogleTranslateProvider(httpClient),
+        };
+
+        TranslationService = new TranslationService(providers, Configuration, Log);
 
         mainWindow = new MainWindow(this, Repository);
         WindowSystem.AddWindow(mainWindow);
@@ -110,8 +131,6 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        // Chat messages must be a single line - if the model returns extra
-        // lines (alternatives, notes, etc.) despite the prompt, only send the first.
         var translated = result.Text.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
 
         var finalText = prefix + translated;

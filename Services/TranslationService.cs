@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
@@ -8,25 +9,19 @@ namespace JPRaidDictionary.Services;
 
 /// <summary>
 /// Coordinates translation requests for both the Quick Translate tab and the
-/// outgoing chat translation modes. Wraps the configured
-/// <see cref="ITranslationProvider"/> (OpenAI or Claude, depending on
-/// <see cref="Configuration.TranslationProvider"/>) with configuration
-/// lookups, API-key validation, and error handling so callers never need to
-/// worry about the underlying provider failing.
+/// outgoing chat translation modes. Routes to the correct
+/// <see cref="ITranslationProvider"/> based on
+/// <see cref="Configuration.TranslationProvider"/>.
 /// </summary>
 public class TranslationService
 {
-    private readonly ITranslationProvider openAiProvider;
-    private readonly ITranslationProvider anthropicProvider;
-    private readonly ITranslationProvider googleTranslateProvider;
+    private readonly Dictionary<TranslationProviderType, ITranslationProvider> providers;
     private readonly Configuration configuration;
     private readonly IPluginLog log;
 
-    public TranslationService(ITranslationProvider openAiProvider, ITranslationProvider anthropicProvider, ITranslationProvider googleTranslateProvider, Configuration configuration, IPluginLog log)
+    public TranslationService(Dictionary<TranslationProviderType, ITranslationProvider> providers, Configuration configuration, IPluginLog log)
     {
-        this.openAiProvider = openAiProvider;
-        this.anthropicProvider = anthropicProvider;
-        this.googleTranslateProvider = googleTranslateProvider;
+        this.providers = providers;
         this.configuration = configuration;
         this.log = log;
     }
@@ -35,11 +30,8 @@ public class TranslationService
     public ApiConnectionStatus Status { get; private set; } = ApiConnectionStatus.NotConfigured;
 
     /// <summary>
-    /// Translates <paramref name="text"/> using the currently configured
-    /// provider. Never throws: if the API key is missing or the request
-    /// fails, the result contains the original text with
-    /// <see cref="TranslationResult.Success"/> set to <c>false</c> and
-    /// <see cref="TranslationResult.ErrorMessage"/> describing the problem.
+    /// Translates <paramref name="text"/> using the currently configured provider.
+    /// Never throws.
     /// </summary>
     public async Task<TranslationResult> TranslateAsync(string text, TranslationDirection direction, CancellationToken cancellationToken = default)
     {
@@ -92,20 +84,36 @@ public class TranslationService
         return Status;
     }
 
-    /// <summary>Resets <see cref="Status"/> to <see cref="ApiConnectionStatus.NotConfigured"/>, e.g. after switching providers.</summary>
+    /// <summary>Fetches available models from the active provider's API.</summary>
+    public async Task<List<string>> FetchModelsAsync(CancellationToken cancellationToken = default)
+    {
+        var (provider, apiKey) = GetActiveProvider();
+
+        if (provider.RequiresApiKey && string.IsNullOrWhiteSpace(apiKey))
+            return new List<string>();
+
+        return await provider.FetchModelsAsync(apiKey, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Resets <see cref="Status"/> to <see cref="ApiConnectionStatus.NotConfigured"/>.</summary>
     public void ResetStatus() => Status = ApiConnectionStatus.NotConfigured;
 
-    private (ITranslationProvider Provider, string ApiKey) GetActiveProvider() => configuration.TranslationProvider switch
+    private (ITranslationProvider Provider, string ApiKey) GetActiveProvider()
     {
-        TranslationProviderType.Claude => (anthropicProvider, configuration.AnthropicApiKey),
-        TranslationProviderType.GoogleTranslate => (googleTranslateProvider, string.Empty),
-        _ => (openAiProvider, configuration.OpenAiApiKey),
-    };
+        var type = configuration.TranslationProvider;
+        var provider = providers.TryGetValue(type, out var p) ? p : providers[TranslationProviderType.OpenAi];
+        var apiKey = configuration.GetApiKey(type);
+        return (provider, apiKey);
+    }
 
     public static string GetProviderDisplayName(TranslationProviderType provider) => provider switch
     {
         TranslationProviderType.Claude => "Anthropic (Claude)",
         TranslationProviderType.GoogleTranslate => "Google Translate (Free)",
+        TranslationProviderType.OpenRouter => "OpenRouter",
+        TranslationProviderType.Groq => "Groq",
+        TranslationProviderType.TogetherAi => "Together AI",
+        TranslationProviderType.CustomOpenAi => "Custom (OpenAI-Compatible)",
         _ => "OpenAI",
     };
 }
